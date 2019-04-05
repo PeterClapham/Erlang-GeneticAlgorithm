@@ -96,11 +96,7 @@ mutate([C|Cs], Cand) ->
 	end.
 
 get_random_string(Length) ->
-    lists:foldl(fun(_, Acc) ->
-                        [lists:nth(rand:uniform(length(?AllowedChars)),
-                                   ?AllowedChars)]
-                            ++ Acc
-                end, [], lists:seq(1, Length)).
+    [lists:nth(rand:uniform(length(?AllowedChars)), ?AllowedChars) || _ <- lists:seq(1, Length)].
 
 getFitness([C], [C], F) ->
 	F+1;
