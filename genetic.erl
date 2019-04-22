@@ -1,65 +1,77 @@
 -module(genetic).
 -compile(export_all).
 
--define(Target, "Hello, World!").
--define(AllowedChars, "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890!'?.,").
--define(MutationRate, 0.1).
+-define(TARGET, "Hello, World!").
+-define(MUTATE_RATE, 0.1).
 
-run(Pop) ->
+
+run(PopSize) ->
 	PopMan = spawn(?MODULE, popMan, [[]]),
-	spawnCand(Pop, PopMan).
+	spawnCand(PopSize, PopMan).
+
+
+popMan(DB) ->
+	% Receive requests from candidates (cand/1).
+	receive
+		{add, Child} ->
+			popMan(DB ++ [Child]);
+		{get, Pid} ->
+			Pid ! lists:nth(rand:uniform(length(DB)), DB),
+			popMan(DB);
+		{remove, Pid} ->
+			popMan(lists:delete(Pid, DB))
+	end.
+
 
 spawnCand(0, Server) ->
 	spawn(?MODULE, cand, [Server]);
 spawnCand(Pop, Server) ->
 	spawn(?MODULE, cand, [Server]),
-	spawnCand(Pop-1, Server).
+    spawnCand(Pop - 1, Server).
 
-popMan(DB) ->
-	% Receive requests from cand: add, remove, get
-	receive
-		{add, Child} -> popMan(DB++[Child]);
-		{get, Pid} -> Pid!lists:nth(rand:uniform(length(DB)), DB), popMan(DB);
-		{remove, Pid} -> popMan(lists:delete(Pid, DB))
-	end.
 
 % Generates a new candidate solution
-cand(Server) ->
+cand(Manager) ->
 	Candidate = manyCandidates(1000, []),
-	Fitness = getFitness(Candidate, ?Target, 0),
-	Server!{add, Candidate},
-	candMain(Candidate, Fitness, Server, 25).
+	Fitness = getFitness(Candidate, ?TARGET, 0),
+	Manager ! {add, Candidate},
+    candMain(Candidate, Fitness, Manager, 25).
+
+
 % Generates a new candidate with a known input string
-cand(Server, Candidate) ->
-	Fitness = getFitness(Candidate, ?Target, 0),
-	Server!{add, Candidate},
-	candMain(Candidate, Fitness, Server, 25).
+cand(Manager, Candidate) ->
+	Fitness = getFitness(Candidate, ?TARGET, 0),
+	Manager ! {add, Candidate},
+    candMain(Candidate, Fitness, Manager, 25).
+    
 
 manyCandidates(0, Candidates) ->
-	bestOne(get_random_string(length(?Target)), Candidates);
+	bestOne(getRandomString(length(?TARGET)), Candidates);
 manyCandidates(N, []) ->
-	manyCandidates(N-1, [get_random_string(length(?Target))]);
+	manyCandidates(N - 1, [getRandomString(length(?TARGET))]);
 manyCandidates(N, Candidates) ->
-	manyCandidates(N-1, [get_random_string(length(?Target))|Candidates]).
+    manyCandidates(N - 1, [getRandomString(length(?TARGET)) | Candidates]).
+    
 
 bestOne(Best, []) ->
 	Best;
-bestOne(Best, [C|Cs]) ->
-	case getFitness(C, ?Target, 0) >= getFitness(Best, ?Target, 0) of
+bestOne(Best, [C | Cs]) ->
+	case getFitness(C, ?TARGET, 0) >= getFitness(Best, ?TARGET, 0) of
 		true -> bestOne(C, Cs);
 		_ -> bestOne(Best, Cs)
 	end.
 
-candMain(?Target, _Fitness, _Server, _N) ->
+
+candMain(?TARGET, _Fitness, _Server, _N) ->
 	io:fwrite("An agent has found the correct solution!");
 candMain(Candidate, Fitness, Server, 0) ->
 	io:fwrite("Agent died, had candidate of ~s and fitness of ~w~n", [Candidate, Fitness]),
 	Server!{remove, self()};
 candMain(Candidate, Fitness, Server, N) ->
 	%timer:sleep(1),
-	case (rand:uniform() + Fitness/(length(?Target))) > 0.4 of
+	case (rand:uniform() + Fitness / (length(?TARGET))) > 0.4 of
 		true ->
-			case (rand:uniform() - Fitness/(length(?Target))) < ?MutationRate of 
+			case (rand:uniform() - Fitness / (length(?TARGET))) < ?MUTATE_RATE of 
 				true -> 
 					% select a mate
 					Server!{get, self()},
@@ -74,35 +86,59 @@ candMain(Candidate, Fitness, Server, N) ->
 					end;
 				_ -> failed
 			end,
-			candMain(Candidate, Fitness, Server, N-1);
+			candMain(Candidate, Fitness, Server, N - 1);
 		_ ->
 			candMain(Candidate, Fitness, Server, 0)
 	end.
 
+
 crossover([], [], _N, _Point, Cand) ->
 	Cand;
-crossover([C|Cs], [M|Ms], N, Point, Cand) ->
+crossover([C | Cs], [M | Ms], N, Point, Cand) ->
 	case N > Point of
-		true -> crossover(Cs, Ms, N+1, Point, [C|Cand]);
-		_ -> crossover(Cs, Ms, N+1, Point, [M|Cand])
+		true  -> crossover(Cs, Ms, N + 1, Point, [C | Cand]);
+		false -> crossover(Cs, Ms, N + 1, Point, [M | Cand])
 	end.
+
 
 mutate([], Cand) ->
 	Cand;
-mutate([C|Cs], Cand) ->
-	case rand:uniform() < ?MutationRate of 
-		true -> mutate(Cs, get_random_string(1) ++ Cand);
-		_ -> mutate(Cs, [C|Cand])
-	end.
+mutate([C | Cs], Cand) ->
+	case rand:uniform() < ?MUTATE_RATE of 
+		true  -> mutate(Cs, getRandomString(1) ++ Cand);
+		false -> mutate(Cs, [C | Cand])
+    end.
+    
 
-get_random_string(Length) ->
-    [lists:nth(rand:uniform(length(?AllowedChars)), ?AllowedChars) || _ <- lists:seq(1, Length)].
+getRandomString(Size) ->
+    [rand:uniform(95) + 31 || _ <- lists:seq(1, Size)].
+
 
 getFitness([C], [C], F) ->
-	F+1;
+	F + 1;
 getFitness([_C], [_T], F) ->
 	F;
-getFitness([C|Cs], [C|Ts], F) ->
-	getFitness(Cs, Ts, F+1);
-getFitness([_C|Cs], [_T|Ts], F) ->
-	getFitness(Cs, Ts, F).
+getFitness([C | Cs], [C | Ts], F) ->
+	getFitness(Cs, Ts, F + 1);
+getFitness([_C | Cs], [_T | Ts], F) ->
+    getFitness(Cs, Ts, F).
+
+
+% Implement FPS
+% List of tupes storing pid and fitness
+% Keep list sorted by fitness for insertion
+% receive getMate, add, remove
+% Give priority to remove
+% getMate sends a pid for server to handle
+% total = getTotal(List)
+% num = random(Total)
+% Recursive function findMate(Num, List)
+
+% FindMate(Num, List) -> FindMate(Num, List, 0).
+% FindMate(Num, [X | Xs], Total) when Total + X >= Num -> X 
+% FindMate(Num, [X | Xs], Total) -> FindMate(Num, Xs, X + Total).
+
+% Then send that to the thingy.
+% X is a tuple of Pid, Fitness.
+
+% Also implement termination if, on adding, it has fitness equal to work length
