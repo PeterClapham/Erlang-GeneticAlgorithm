@@ -4,6 +4,9 @@
 -define(TARGET, "Hello, World!").
 -define(MUTATE_RATE, 0.1).
 
+% TODO: Write and stick to strict type definitions where possible
+% -type candidate() :: {pid(), string()}.
+
 % To run the program, spawns the population manager and starts spawning candidate solutions
 run(PopSize) ->
 	PopMan = spawn(?MODULE, popMan, [[]]),
@@ -11,32 +14,41 @@ run(PopSize) ->
 
 % Population manager. Acts as a simulated 'nature', where 'DB' is the pool of candidate solutions
 % Receives requests from these candidates and handles the requests
-% The terminate case is when a child has a fitness equal to the word
-popMan({terminate, Id} ) ->
-	doTerminate();
+% Terminates if, on adding, it discovers that a candidate has found the solutions
 popMan(DB) ->
 	receive
 		% Add a child to the sorted DB. The terminate case is within this method
-		{add, Child} ->
-			popMan(addChild(DB, Child));
+		{add, {Pid, String}} ->
+			Fitness = getFitness(String, ?TARGET, 0),
+			case Fitness == length(?TARGET) of
+				true ->
+					exit(Pid, finished),
+					sendTerminations(DB);
+				false ->
+					popMan(addChild(DB, {Pid, String}))
+				end;
 		% Gets a mate from the DB, TODO: Implement fitness proportional selection
 		{getMate, Pid} ->
-			Pid ! lists:nth(rand:uniform(length(DB)), DB),
+			getMate(DB, Pid),
 			popMan(DB);
 		% Simulation of dying, removes a candidate solution from the DB
 		{remove, Pid} ->
-			popMan(lists:delete(Pid, DB))
+			popMan(lists:keydelete(Pid, 1, DB))
 	end.
 
+sendTerminations([]) -> finished;
+sendTerminations([{Pid, _String} | Others]) ->
+	exit(Pid, finished),
+	sendTerminations(Others).
+
 % Adds a child to the sorted DB, also sends termination message
-addChild(DB, {Pid, length(?TARGET)}) -> 
-	{terminate, Pid};
-addChild([{XPid, XFitness} | Xs], {Pid, Fitness}) when XFitness < Fitness ->
-	{Pid, Fitness} ++ [{XPid, XFitness} | Xs];
-addChild([], {Pid, Fitness}) -> 
-	[{Pid, Fitness}];
-addChild([X | Xs], Child) -> 
-	[X] ++ addChild(Xs, Child).
+addChild([], {Pid, String}) -> 
+	[{Pid, String}];
+addChild([{XPid, XString} | Xs], {Pid, String}) ->
+	case getFitness(String, ?TARGET, 0) < getFitness(XString, ?TARGET, 0) of 
+		true -> [{XPid, XString}] ++ addChild(Xs, {Pid, String});
+		false -> [{Pid, String}] ++ [{XPid, XString} | Xs]
+	end.
 
 % Creates the initial set of candidate solutions
 spawnCand(0, Server) ->
@@ -45,14 +57,12 @@ spawnCand(Pop, Server) ->
 	spawn(?MODULE, cand, [Server]),
   spawnCand(Pop - 1, Server).
 
-
 % Initializes the new candidate solution from scratch
 cand(Manager) ->
 	Candidate = manyCandidates(1000, []),
 	Fitness = getFitness(Candidate, ?TARGET, 0),
-	Manager ! {add, Candidate},
+	Manager ! {add, {self(), Candidate}},
   candMain(Candidate, Fitness, Manager, 25).
-
 
 % Generates a new candidate with a known input string
 cand(Manager, Candidate) ->
@@ -85,9 +95,6 @@ bestOne(Best, [C | Cs]) ->
 %   - If it mates, it selects a random other candidate (will be fitness proportional selection)
 %   - After selecting another candidate, it performs crossover to get a new DNA and mutates it
 %   - After this, it recurses back with N - 1
-% TODO: Possibly remove the ?TARGET catch, possibly work on the 'false -> failed' line
-candMain(?TARGET, _Fitness, _Server, _N) ->
-	io:fwrite("An agent has found the correct solution!");
 candMain(Candidate, Fitness, Server, 0) ->
 	io:fwrite("Agent died, had candidate of ~s and fitness of ~w~n", [Candidate, Fitness]),
 	Server!{remove, self()};
@@ -110,7 +117,12 @@ candMain(Candidate, Fitness, Server, N) ->
 							% create the process
 							spawn(?MODULE, cand, [Server, MutatedCand])
 					end;
-				false -> failed
+				% If it is false, this means that there are not enough candidate solutions.
+				% As a fix, I generate a new set of 50 candidates while keeping this process running
+				false ->
+					spawnCand(50, Server),
+					candMain(Candidate, Fitness, Server, N - 1),
+					failed
 			end,
 			candMain(Candidate, Fitness, Server, N - 1);
 		false ->
@@ -149,32 +161,26 @@ getFitness([C | Cs], [C | Ts], F) ->
 getFitness([_C | Cs], [_T | Ts], F) ->
   getFitness(Cs, Ts, F).
 
-% TODO: 
-%   - Implement FPS
-%   - List of tuples storing pid and fitness
-%   - Keep list sorted by fitness for insertion   DONE
-%   - receive getMate, add, remove                DONE
-%   - Give priority to remove
-%   - getMate sends a pid for server to handle
-%   - total = getTotal(List)
-%   - num = random(Total)
-%   - Recursive function findMate(Num, List)
-% Potential code: 
-% FindMate(Num, List) -> FindMate(Num, List, 0).
-% FindMate(Num, [X | Xs], Total) when Total + X >= Num -> X 
-% FindMate(Num, [X | Xs], Total) -> FindMate(Num, Xs, X + Total).
+% Returns a mate, decided by fitness proportional selection
+getMate(List, Pid) ->
+	Total = getTotal(List),
+	Threshold = rand:uniform(Total),
+	String = findMate(Threshold, List),
+	Pid ! String.
 
-% Then send that to the thingy.
-% X is a tuple of Pid, Fitness.
+findMate(Num, List) -> findMate(Num, List, 0).
+findMate(Num, [{_Pid, String} | Tail], Total) ->
+	Fitness = getFitness(String, ?TARGET, 0),
+	case Fitness + Total >= Num of
+		true -> String;
+		false -> findMate(Num, Tail, Fitness + Total)
+	end.
 
-% Also implement termination if, on adding, it has fitness equal to work length
+getTotal(List) -> getTotal(List, 0).
+getTotal([{_Pid, String} | Tail], Total) -> getTotal(Tail, Total + getFitness(String, ?TARGET, 0));
+getTotal([], Total) -> Total.
 
-% {terminate, Id} ->
-%   Id ! TerminateCommand,
-%   sendTerminations(List),
-%   ok.
-
-% Hence, throw in a two second offset in the timer:tc
+% Trow in a two second offset in the timer:tc
 
 % Perhaps alter the output system to be, every so often, checking the average fitness of the solutions
 % Implement by having a running process every time a death is recorded storing two params, average fitness
