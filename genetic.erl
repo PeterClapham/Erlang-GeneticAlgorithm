@@ -1,8 +1,11 @@
 -module(genetic).
 -compile(export_all).
 
+% These are variables you can tweak manually in the source code
 -define(TARGET, "Hello, World!").
--define(MUTATE_RATE, 0.2).
+-define(MUTATE_RATE, 0.1).
+-define(BREED_RATE, 0.4).
+-define(CROSSOVER_RATE, 0.2).
 
 % TODO: Write and stick to strict type definitions where possible
 % -type candidate() :: {pid(), string()}.
@@ -15,30 +18,59 @@ run(PopSize) ->
 % Population manager. Acts as a simulated 'nature', where 'DB' is the pool of candidate solutions
 % Receives requests from these candidates and handles the requests
 % Terminates if, on adding, it discovers that a candidate has found the solutions
+% Removing has priority over the two other commands
 popMan(DB) ->
 	receive
-		% Add a child to the sorted DB. The terminate case is within this method
-		{add, {Pid, String}} ->
-			Fitness = getFitness(String, ?TARGET, 0),
-			case Fitness == length(?TARGET) of
-				true ->
-					exit(Pid, finished),
-					sendTerminations(DB);
-				false ->
-					popMan(addChild(DB, {Pid, String}))
-				end;
-		% Gets a mate from the DB, TODO: Implement fitness proportional selection
-		{getMate, Pid} ->
-			getMate(DB, Pid),
-			popMan(DB);
 		% Simulation of dying, removes a candidate solution from the DB
 		{remove, Pid} ->
 			NewDB = lists:keydelete(Pid, 1, DB),
-			case length(NewDB) of
-				0 -> spawnCand(50, self());
-				_ -> popMan(NewDB)
+				case length(NewDB) of
+					0 -> spawnCand(50, self());
+					_ -> popMan(NewDB)
+				end
+		after 0 ->
+			receive
+				% Add a child to the sorted DB. The terminate case is within this method
+				{add, {Pid, String}} ->
+					Fitness = getFitness(String, ?TARGET, 0),
+					case Fitness == length(?TARGET) of
+						true ->
+							exit(Pid, finished),
+							sendTerminations(DB);
+						false ->
+							popMan(addChild(DB, {Pid, String}))
+					end;
+				% Gets a mate from the DB
+				{getMate, Pid} ->
+					getMate(DB, Pid),
+					popMan(DB)
 			end
 	end.
+
+% Sends the mate that is decided by findMate to the agent
+getMate(List, Pid) ->
+	Total = getTotal(List),
+	case Total of
+		0 -> Pid ! getRandomString(length(?TARGET));
+		_ -> 
+			Threshold = rand:uniform(Total),
+			String = findMate(Threshold, List),
+			Pid ! String
+	end.
+
+% Implementation of fitness proportional selection, returns the String choice
+findMate(Num, List) -> findMate(Num, List, 0).
+findMate(Num, [{_Pid, String} | Tail], Total) ->
+	Fitness = getFitness(String, ?TARGET, 0),
+	case Fitness + Total >= Num of
+		true -> String;
+		false -> findMate(Num, Tail, Fitness + Total)
+	end.
+
+% Gets ths total fitness of the list
+getTotal(List) -> getTotal(List, 0).
+getTotal([{_Pid, String} | Tail], Total) -> getTotal(Tail, Total + getFitness(String, ?TARGET, 0));
+getTotal([], Total) -> Total.
 
 sendTerminations([]) -> finished;
 sendTerminations([{Pid, _String} | Others]) ->
@@ -103,19 +135,22 @@ candMain(Candidate, Fitness, Server, 0) ->
 	io:fwrite("Agent died, had candidate of ~s and fitness of ~w~n", [Candidate, Fitness]),
 	Server!{remove, self()};
 candMain(Candidate, Fitness, Server, N) ->
-	% timer:sleep(1),
+	timer:sleep(1),
 	% This case command checks if a candidate dies
 	case (rand:uniform() + Fitness / (length(?TARGET))) > 0.4 of
 		true ->
 		  % This case command checks if a candidate mates
-			case (rand:uniform() - Fitness / (length(?TARGET))) < ?MUTATE_RATE of 
+			case (rand:uniform() - Fitness / (length(?TARGET))) < ?BREED_RATE of 
 				true -> 
 					% select a mate
 					Server!{getMate, self()},
 					receive 
 						Mate ->
 							% perform one point crossover at a random point
-							NewCand = crossover(Candidate, Mate, 0, rand:uniform(length(Candidate)), []),
+							case rand:uniform() < ?CROSSOVER_RATE of 
+								true -> NewCand = crossover(Candidate, Mate, 0, rand:uniform(length(Candidate)), []);
+								false -> NewCand = Candidate
+							end,
 							% mutate the result
 							MutatedCand = mutate(NewCand, []),
 							% create the process
@@ -145,7 +180,7 @@ mutate([C | Cs], Cand) ->
 	case rand:uniform() < ?MUTATE_RATE of 
 		true  -> mutate(Cs, getRandomString(1) ++ Cand);
 		false -> mutate(Cs, [C | Cand])
-    end.
+  end.
     
 % Generates a random string of a certain size
 getRandomString(Size) ->
@@ -160,29 +195,6 @@ getFitness([C | Cs], [C | Ts], F) ->
 	getFitness(Cs, Ts, F + 1);
 getFitness([_C | Cs], [_T | Ts], F) ->
   getFitness(Cs, Ts, F).
-
-% Returns a mate, decided by fitness proportional selection
-getMate(List, Pid) ->
-	Total = getTotal(List),
-	case Total of
-		0 -> Pid ! getRandomString(length(?TARGET));
-		_ -> 
-			Threshold = rand:uniform(Total),
-			String = findMate(Threshold, List),
-			Pid ! String
-	end.
-
-findMate(Num, List) -> findMate(Num, List, 0).
-findMate(Num, [{_Pid, String} | Tail], Total) ->
-	Fitness = getFitness(String, ?TARGET, 0),
-	case Fitness + Total >= Num of
-		true -> String;
-		false -> findMate(Num, Tail, Fitness + Total)
-	end.
-
-getTotal(List) -> getTotal(List, 0).
-getTotal([{_Pid, String} | Tail], Total) -> getTotal(Tail, Total + getFitness(String, ?TARGET, 0));
-getTotal([], Total) -> Total.
 
 % Throw in a two second offset in the timer:tc
 
