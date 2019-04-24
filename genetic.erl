@@ -2,7 +2,7 @@
 -compile(export_all).
 
 -define(TARGET, "Hello, World!").
--define(MUTATE_RATE, 0.1).
+-define(MUTATE_RATE, 0.2).
 
 % TODO: Write and stick to strict type definitions where possible
 % -type candidate() :: {pid(), string()}.
@@ -33,7 +33,11 @@ popMan(DB) ->
 			popMan(DB);
 		% Simulation of dying, removes a candidate solution from the DB
 		{remove, Pid} ->
-			popMan(lists:keydelete(Pid, 1, DB))
+			NewDB = lists:keydelete(Pid, 1, DB),
+			case length(NewDB) of
+				0 -> spawnCand(50, self());
+				_ -> popMan(NewDB)
+			end
 	end.
 
 sendTerminations([]) -> finished;
@@ -62,13 +66,13 @@ cand(Manager) ->
 	Candidate = manyCandidates(1000, []),
 	Fitness = getFitness(Candidate, ?TARGET, 0),
 	Manager ! {add, {self(), Candidate}},
-  candMain(Candidate, Fitness, Manager, 25).
+  candMain(Candidate, Fitness, Manager, 10).
 
 % Generates a new candidate with a known input string
 cand(Manager, Candidate) ->
 	Fitness = getFitness(Candidate, ?TARGET, 0),
 	Manager ! {add, Candidate},
-  candMain(Candidate, Fitness, Manager, 25).
+  candMain(Candidate, Fitness, Manager, 10).
     
 % Produces a list of potential candidates and returns the best one
 manyCandidates(0, Candidates) ->
@@ -99,7 +103,7 @@ candMain(Candidate, Fitness, Server, 0) ->
 	io:fwrite("Agent died, had candidate of ~s and fitness of ~w~n", [Candidate, Fitness]),
 	Server!{remove, self()};
 candMain(Candidate, Fitness, Server, N) ->
-	%timer:sleep(1),
+	% timer:sleep(1),
 	% This case command checks if a candidate dies
 	case (rand:uniform() + Fitness / (length(?TARGET))) > 0.4 of
 		true ->
@@ -117,11 +121,7 @@ candMain(Candidate, Fitness, Server, N) ->
 							% create the process
 							spawn(?MODULE, cand, [Server, MutatedCand])
 					end;
-				% If it is false, this means that there are not enough candidate solutions.
-				% As a fix, I generate a new set of 50 candidates while keeping this process running
 				false ->
-					spawnCand(50, Server),
-					candMain(Candidate, Fitness, Server, N - 1),
 					failed
 			end,
 			candMain(Candidate, Fitness, Server, N - 1);
@@ -164,9 +164,13 @@ getFitness([_C | Cs], [_T | Ts], F) ->
 % Returns a mate, decided by fitness proportional selection
 getMate(List, Pid) ->
 	Total = getTotal(List),
-	Threshold = rand:uniform(Total),
-	String = findMate(Threshold, List),
-	Pid ! String.
+	case Total of
+		0 -> Pid ! getRandomString(length(?TARGET));
+		_ -> 
+			Threshold = rand:uniform(Total),
+			String = findMate(Threshold, List),
+			Pid ! String
+	end.
 
 findMate(Num, List) -> findMate(Num, List, 0).
 findMate(Num, [{_Pid, String} | Tail], Total) ->
@@ -180,7 +184,7 @@ getTotal(List) -> getTotal(List, 0).
 getTotal([{_Pid, String} | Tail], Total) -> getTotal(Tail, Total + getFitness(String, ?TARGET, 0));
 getTotal([], Total) -> Total.
 
-% Trow in a two second offset in the timer:tc
+% Throw in a two second offset in the timer:tc
 
 % Perhaps alter the output system to be, every so often, checking the average fitness of the solutions
 % Implement by having a running process every time a death is recorded storing two params, average fitness
